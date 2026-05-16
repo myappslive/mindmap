@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sleek Mind Map</title>
+    <style>
+        :root {
+            --bg: #f8fafc;
+            --text: #0f172a;
+            --node-bg: #ffffff;
+            --border: #e2e8f0;
+            --line: #cbd5e1;
+            --primary: #3b82f6;
+            --primary-light: #eff6ff;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            overflow: hidden; /* Prevent native scrollbars */
+        }
+
+        header {
+            padding: 16px 24px;
+            background: var(--node-bg);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: fixed;
+            top: 0;
+            width: 100%;
+            box-sizing: border-box;
+            z-index: 100;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+
+        .controls span {
+            font-size: 13px;
+            color: #64748b;
+            margin-right: 16px;
+        }
+
+        button {
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: 1px solid #e2e8f0;
+            background: #fff;
+            cursor: pointer;
+            margin-left: 8px;
+            color: #475569;
+            transition: background 0.2s;
+        }
+        
+        button:hover { background: #f1f5f9; }
+
+        /* Viewport & Canvas */
+        #viewport {
+            width: 100vw;
+            height: 100vh;
+            cursor: grab;
+            position: relative;
+        }
+
+        #viewport:active {
+            cursor: grabbing;
+        }
+
+        #canvas {
+            transform-origin: 0 0;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: max-content;
+        }
+
+        /* Tree CSS */
+        ul.tree {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            padding-left: 40px;
+            position: relative;
+            list-style: none;
+            margin: 0;
+        }
+
+        ul.tree::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: 20px;
+            width: 2px;
+            background: var(--line);
+        }
+
+        #canvas > ul.tree { padding-left: 0; }
+        #canvas > ul.tree::before { display: none; }
+
+        li.tree-item {
+            display: flex;
+            align-items: center;
+            position: relative;
+        }
+
+        li.tree-item::before {
+            content: '';
+            position: absolute;
+            left: -20px;
+            top: 50%;
+            width: 20px;
+            height: 2px;
+            background: var(--line);
+        }
+
+        #canvas > ul.tree > li.tree-item::before { display: none; }
+
+        .node {
+            padding: 12px 20px;
+            background: var(--node-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            cursor: pointer;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+            transition: all 0.1s ease;
+            min-width: 100px;
+            outline: none;
+            user-select: none; /* Prevent text selection while dragging */
+        }
+
+        .node:hover {
+            border-color: #94a3b8;
+        }
+
+        .node.selected {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px var(--primary-light);
+        }
+        
+        .node[contenteditable="true"] {
+            cursor: text;
+            background: #fafafa;
+            user-select: text;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <strong style="font-size: 16px;">Mind Map Creator</strong>
+        <div class="controls">
+            <span><strong>C</strong>: Child</span>
+            <span><strong>P</strong>: Sibling</span>
+            <span><strong>Space</strong>: Edit</span>
+            <span><strong>Del</strong>: Remove</span>
+            <button onclick="resetView()">Reset View</button>
+            <button onclick="clearData()">Clear All</button>
+        </div>
+    </header>
+
+    <div id="viewport">
+        <div id="canvas"></div>
+    </div>
+
+    <script>
+        const STORAGE_KEY = 'mindmap_data';
+        let mindMapData = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {
+            id: 'root',
+            text: 'Central Idea',
+            children: []
+        };
+        
+        let selectedNodeId = 'root';
+
+        // --- Viewport State (Pan & Zoom) ---
+        let scale = 1;
+        let panX = 100; // Initial offset so the root isn't hidden under the header
+        let panY = 100;
+        let isDragging = false;
+        let startX, startY;
+
+        const viewport = document.getElementById('viewport');
+        const canvas = document.getElementById('canvas');
+
+        function updateTransform() {
+            canvas.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+        }
+
+        function resetView() {
+            scale = 1;
+            panX = 100;
+            panY = 100;
+            updateTransform();
+        }
+
+        // Zoom (Mouse Wheel)
+        viewport.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            
+            // Adjust zoom speed here
+            const zoomSensitivity = 0.001; 
+            const delta = e.deltaY * -zoomSensitivity;
+            let newScale = scale * Math.exp(delta);
+            
+            // Limit zoom scale (20% to 300%)
+            newScale = Math.max(0.2, Math.min(newScale, 3));
+
+            // Calculate mouse position relative to viewport
+            const rect = viewport.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+
+            // Adjust pan so the zoom is centered on the mouse cursor
+            panX = mouseX - (mouseX - panX) * (newScale / scale);
+            panY = mouseY - (mouseY - panY) * (newScale / scale);
+            scale = newScale;
+
+            updateTransform();
+        }, { passive: false });
+
+        // Pan (Drag Background)
+        viewport.addEventListener('mousedown', (e) => {
+            // Only start panning if clicking on the background, not on a node
+            if (e.target.closest('.node')) return; 
+            
+            isDragging = true;
+            startX = e.clientX - panX;
+            startY = e.clientY - panY;
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            panX = e.clientX - startX;
+            panY = e.clientY - startY;
+            updateTransform();
+        });
+
+        window.addEventListener('mouseup', () => {
+            isDragging = false;
+        });
+
+
+        // --- Data Management ---
+        function save() {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(mindMapData));
+            render();
+        }
+
+        function clearData() {
+            if(confirm("Clear all data and start fresh?")) {
+                mindMapData = { id: 'root', text: 'Central Idea', children: [] };
+                selectedNodeId = 'root';
+                save();
+                resetView();
+            }
+        }
+
+        function generateId() {
+            return Math.random().toString(36).substr(2, 9);
+        }
+
+        function findNodeAndParent(node, id, parent = null) {
+            if (node.id === id) return { node, parent };
+            if (node.children) {
+                for (let child of node.children) {
+                    const result = findNodeAndParent(child, id, node);
+                    if (result) return result;
+                }
+            }
+            return null;
+        }
+
+        // --- Actions ---
+        function addChild(parentId) {
+            const result = findNodeAndParent(mindMapData, parentId);
+            if (result) {
+                const newId = generateId();
+                if (!result.node.children) result.node.children = [];
+                result.node.children.push({ id: newId, text: 'New Node', children: [] });
+                selectedNodeId = newId;
+                save();
+            }
+        }
+
+        function addSibling(nodeId) {
+            if (nodeId === 'root') return; 
+            const result = findNodeAndParent(mindMapData, nodeId);
+            if (result && result.parent) {
+                const newId = generateId();
+                const index = result.parent.children.findIndex(c => c.id === nodeId);
+                result.parent.children.splice(index + 1, 0, { id: newId, text: 'New Node', children: [] });
+                selectedNodeId = newId;
+                save();
+            }
+        }
+
+        function deleteNode(nodeId) {
+            if (nodeId === 'root') return; 
+            const result = findNodeAndParent(mindMapData, nodeId);
+            if (result && result.parent) {
+                result.parent.children = result.parent.children.filter(c => c.id !== nodeId);
+                selectedNodeId = result.parent.id; 
+                save();
+            }
+        }
+
+        // --- Rendering ---
+        function createDOMTree(node) {
+            const li = document.createElement('li');
+            li.className = 'tree-item';
+
+            const div = document.createElement('div');
+            div.className = `node ${node.id === selectedNodeId ? 'selected' : ''}`;
+            div.textContent = node.text;
+            div.dataset.id = node.id;
+            
+            div.addEventListener('mousedown', (e) => {
+                e.stopPropagation(); // Prevent panning when clicking a node
+            });
+
+            div.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (div.isContentEditable) return;
+                selectedNodeId = node.id;
+                render();
+            });
+
+            div.addEventListener('blur', () => {
+                div.contentEditable = false;
+                node.text = div.textContent || 'Empty Node';
+                save();
+            });
+
+            div.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    div.blur();
+                }
+            });
+
+            li.appendChild(div);
+
+            if (node.children && node.children.length > 0) {
+                const ul = document.createElement('ul');
+                ul.className = 'tree';
+                node.children.forEach(child => {
+                    ul.appendChild(createDOMTree(child));
+                });
+                li.appendChild(ul);
+            }
+
+            return li;
+        }
+
+        function render() {
+            canvas.innerHTML = '';
+            const ul = document.createElement('ul');
+            ul.className = 'tree';
+            ul.appendChild(createDOMTree(mindMapData));
+            canvas.appendChild(ul);
+            updateTransform(); // Ensure transform is applied after render
+        }
+
+        // --- Keyboard Shortcuts ---
+        document.addEventListener('keydown', (e) => {
+            const activeNode = document.querySelector('.node[contenteditable="true"]');
+            if (activeNode) return;
+
+            if (!selectedNodeId) return;
+
+            switch (e.key.toLowerCase()) {
+                case 'c':
+                    e.preventDefault();
+                    addChild(selectedNodeId);
+                    break;
+                case 'p':
+                    e.preventDefault();
+                    addSibling(selectedNodeId);
+                    break;
+                case ' ':
+                    e.preventDefault();
+                    const el = document.querySelector(`.node[data-id="${selectedNodeId}"]`);
+                    if (el) {
+                        el.contentEditable = true;
+                        el.focus();
+                        document.execCommand('selectAll', false, null);
+                    }
+                    break;
+                case 'delete':
+                case 'backspace':
+                    e.preventDefault();
+                    deleteNode(selectedNodeId);
+                    break;
+            }
+        });
+
+        // Initialize
+        render();
+        updateTransform();
+    </script>
+</body>
+</html>
